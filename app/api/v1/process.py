@@ -67,8 +67,16 @@ def list_processes(db: Session = Depends(get_db)):
     response_model=ProcessResponse,
     status_code=status.HTTP_201_CREATED,
 )
-def start_process(db: Session = Depends(get_db)):
+async def start_process(db: Session = Depends(get_db)):
     process = process_service.start_process(db)
+
+    import asyncio
+    asyncio.create_task(
+        asyncio.to_thread(
+            process_service.run_process_in_background,
+            process.id,
+        )
+    )
 
     return build_process_response(process)
 
@@ -120,3 +128,21 @@ def get_process_results(process_id: str, db: Session = Depends(get_db)):
     result = process_service.get_process_result(db, process_id)
 
     return build_process_response(process, result)
+
+@router.get("/logs/{process_id}")
+def get_process_logs(process_id: str, db: Session = Depends(get_db)):
+    logs = process_service.list_process_logs(db, process_id)
+
+    if logs is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Process not found",
+        )
+
+    return [
+        {
+            "message": log.message,
+            "created_at": log.created_at,
+        }
+        for log in logs
+    ]
