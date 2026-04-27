@@ -1,5 +1,6 @@
 import json
-from typing import List
+from datetime import datetime, timedelta, timezone
+from typing import List, Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.core.database import get_db
@@ -21,6 +22,26 @@ def build_progress_response(process) -> ProgressResponse:
     )
 
 
+def _estimate_completion(process) -> Optional[datetime]:
+    if process.status != "RUNNING" or process.started_at is None:
+        return None
+
+    now = datetime.now(timezone.utc)
+    # SQLite devuelve datetimes naive; los normalizamos a UTC 
+    started = process.started_at
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+
+    if process.total_files > 0 and process.processed_files > 0:
+        elapsed = (now - started).total_seconds()
+        time_per_file = elapsed / process.processed_files
+        remaining = time_per_file * (process.total_files - process.processed_files)
+        return now + timedelta(seconds=remaining)
+
+    # Sin progreso aún: estimado fijo de 2 minutos desde el arranque
+    return started + timedelta(minutes=2)
+
+
 def build_process_response(process, result=None) -> ProcessResponse:
     result_response = None
 
@@ -39,7 +60,7 @@ def build_process_response(process, result=None) -> ProcessResponse:
         status=process.status,
         progress=build_progress_response(process),
         started_at=process.started_at,
-        estimated_completion=None,
+        estimated_completion=_estimate_completion(process),
         results=result_response,
     )
 
