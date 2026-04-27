@@ -1,6 +1,6 @@
 import json
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.schemas.process import (
@@ -67,17 +67,9 @@ def list_processes(db: Session = Depends(get_db)):
     response_model=ProcessResponse,
     status_code=status.HTTP_201_CREATED,
 )
-async def start_process(db: Session = Depends(get_db)):
+def start_process(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     process = process_service.start_process(db)
-
-    import asyncio
-    asyncio.create_task(
-        asyncio.to_thread(
-            process_service.run_process_in_background,
-            process.id,
-        )
-    )
-
+    background_tasks.add_task(process_service.run_process_in_background, process.id)
     return build_process_response(process)
 
 

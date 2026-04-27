@@ -7,7 +7,12 @@ from app.models.process import Process
 from app.models.process_result import ProcessResult
 from app.models.activity_log import ActivityLog
 
+from fastapi.responses import JSONResponse
+from fastapi.requests import Request
+from fastapi import status
+
 Base.metadata.create_all(bind=engine)
+
 
 app = FastAPI(
     title="Document Processing API",
@@ -15,9 +20,16 @@ app = FastAPI(
     version="1.0.0",
 )
 
-app.include_router(process_router, prefix="/process", tags=["Process"])
-
-
 @app.get("/health")
 def health_check():
     return {"status": "UP"}
+
+
+@app.exception_handler(ValueError)
+async def value_error_handler(request: Request, exc: ValueError):
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": str(exc)}
+    )
+
+app.include_router(process_router, prefix="/process", tags=["Process"])

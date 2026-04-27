@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from sqlalchemy.orm import Session
@@ -35,13 +35,16 @@ def update_process_status(
         return None
 
     process.status = status
-    process.updated_at = datetime.utcnow()
+    process.updated_at = datetime.now(timezone.utc)
 
     if error_message:
         process.error_message = error_message
 
+    if status == "RUNNING" and process.started_at is None:
+        process.started_at = datetime.now(timezone.utc)
+
     if status in ["COMPLETED", "FAILED", "STOPPED"]:
-        process.completed_at = datetime.utcnow()
+        process.completed_at = datetime.now(timezone.utc)
 
     db.commit()
     db.refresh(process)
@@ -67,7 +70,7 @@ def update_process_progress(
     process.processed_files = processed_files
     process.total_files = total_files
     process.percentage = percentage
-    process.updated_at = datetime.utcnow()
+    process.updated_at = datetime.now(timezone.utc)
 
     db.commit()
     db.refresh(process)
@@ -100,16 +103,16 @@ def add_activity_log(
     db: Session,
     process_id: str,
     message: str,
+    level: str = "INFO",
 ) -> ActivityLog:
     log = ActivityLog(
         process_id=process_id,
         message=message,
+        level=level,
     )
-
     db.add(log)
     db.commit()
     db.refresh(log)
-
     return log
 
 

@@ -13,10 +13,8 @@ DEFAULT_TEXTS_FOLDER = "data/texts"
 
 def get_text_files(folder_path: str = DEFAULT_TEXTS_FOLDER) -> List[Path]:
     folder = Path(folder_path)
-
     if not folder.exists():
-        return []
-
+        raise FileNotFoundError(f"La carpeta {folder_path} no existe")
     return sorted(folder.glob("*.txt"))
 
 
@@ -69,7 +67,7 @@ def generate_summary(text: str, max_sentences: int = 3) -> str:
 
 
 def process_documents(
-    folder_path: str = DEFAULT_TEXTS_FOLDER,
+    folder_path: str = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> Dict:
     """
@@ -82,9 +80,15 @@ def process_documents(
     - acumula resultados generales
     - devuelve un resumen final del proceso
     """
-    files = get_text_files(folder_path)
-    batches = split_into_batches(files, batch_size)
+    if folder_path is None:
+        folder_path = DEFAULT_TEXTS_FOLDER
 
+    files = get_text_files(folder_path)
+
+    if not files:
+        raise FileNotFoundError("No se encontraron archivos para procesar")
+
+    batches = split_into_batches(files, batch_size)
     total_words = 0
     total_lines = 0
     total_characters = 0
@@ -93,26 +97,22 @@ def process_documents(
     summaries = []
 
     for batch in batches:
-        # Recorro cada lote de archivos.
         for file_path in batch:
-            # Leo el contenido del archivo usando UTF-8 para soportar textos comunes.
-            text = file_path.read_text(encoding="utf-8")
-
-            # Analizo el contenido del archivo actual.
-            analysis = analyze_text(text)
-
-            # Acumulo los valores para el resultado total del proceso.
+            if file_path.suffix.lower() != ".txt":
+                continue
+            try:
+                text = file_path.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            try:
+                analysis = analyze_text(text)
+            except Exception:
+                continue
             total_words += analysis["total_words"]
             total_lines += analysis["total_lines"]
             total_characters += analysis["total_characters"]
-
-            # Sumo las frecuencias de palabras de este archivo al contador general.
             global_word_frequencies.update(analysis["word_frequencies"])
-
-            # Guardo el nombre del archivo procesado para devolverlo en la respuesta.
             files_processed.append(file_path.name)
-
-            # Genero un resumen simple del archivo y lo agrego al resumen general.
             summary = generate_summary(text)
             if summary:
                 summaries.append(f"{file_path.name}: {summary}")
