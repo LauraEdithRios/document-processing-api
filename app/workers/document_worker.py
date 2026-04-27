@@ -69,6 +69,7 @@ def generate_summary(text: str, max_sentences: int = 3) -> str:
 def process_documents(
     folder_path: str = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
+    pause_check=None,
 ) -> Dict:
     """
     Procesa todos los archivos .txt de la carpeta indicada.
@@ -98,6 +99,8 @@ def process_documents(
 
     for batch in batches:
         for file_path in batch:
+            if pause_check:
+                pause_check()
             if file_path.suffix.lower() != ".txt":
                 continue
             try:

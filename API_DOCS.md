@@ -27,7 +27,7 @@ Returned by `/start`, `/stop`, `/status`, and `/results`.
 | `status` | `string` | Current state (see [Process States](#process-states)) |
 | `progress` | `ProgressResponse` | File processing counters |
 | `started_at` | `datetime \| null` | UTC timestamp when processing started |
-| `estimated_completion` | `datetime \| null` | Always `null` in current version |
+| `estimated_completion` | `datetime \| null` | Projected UTC completion time when `RUNNING`; `null` otherwise |
 | `results` | `ProcessResultResponse \| null` | Populated only when status is `COMPLETED` |
 
 ### ProgressResponse
@@ -76,9 +76,23 @@ Returned by `/list`.
 |-------|-------------|
 | `PENDING` | Process created, waiting to start |
 | `RUNNING` | Processing documents |
+| `PAUSED` | Temporarily suspended; worker is blocked between file reads |
 | `COMPLETED` | Finished successfully |
 | `FAILED` | Terminated with error |
 | `STOPPED` | Manually stopped |
+
+**Valid transitions:**
+
+```
+PENDING → RUNNING
+RUNNING → COMPLETED
+RUNNING → FAILED
+RUNNING → PAUSED
+PAUSED  → RUNNING   (resume)
+PENDING → STOPPED
+RUNNING → STOPPED
+PAUSED  → STOPPED
+```
 
 ---
 
@@ -193,9 +207,83 @@ Returns an empty array `[]` if no processes exist.
 
 ---
 
+### `POST /process/pause/{process_id}`
+
+Pauses a `RUNNING` process. The worker finishes the file currently in progress and then blocks until the process is resumed or stopped. Progress is preserved.
+
+**Path parameters**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `process_id` | `string (UUID)` | Yes | Process identifier |
+
+**Request body:** None
+
+**Response `200 OK`** — `ProcessResponse`
+
+```json
+{
+  "process_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "status": "PAUSED",
+  "progress": {
+    "total_files": 10,
+    "processed_files": 4,
+    "percentage": 40
+  },
+  "started_at": "2024-01-15T10:30:00.000000Z",
+  "estimated_completion": null,
+  "results": null
+}
+```
+
+**Response `404 Not Found`** — Process not found or not in `RUNNING` state
+
+```json
+{ "detail": "Process not found or not running" }
+```
+
+---
+
+### `POST /process/resume/{process_id}`
+
+Resumes a `PAUSED` process. The worker unblocks and continues from where it stopped.
+
+**Path parameters**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `process_id` | `string (UUID)` | Yes | Process identifier |
+
+**Request body:** None
+
+**Response `200 OK`** — `ProcessResponse`
+
+```json
+{
+  "process_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "status": "RUNNING",
+  "progress": {
+    "total_files": 10,
+    "processed_files": 4,
+    "percentage": 40
+  },
+  "started_at": "2024-01-15T10:30:00.000000Z",
+  "estimated_completion": "2024-01-15T10:31:30.000000Z",
+  "results": null
+}
+```
+
+**Response `404 Not Found`** — Process not found or not in `PAUSED` state
+
+```json
+{ "detail": "Process not found or not paused" }
+```
+
+---
+
 ### `POST /process/stop/{process_id}`
 
-Stops a process. Only processes in `PENDING` or `RUNNING` state can be stopped. Processes already in `COMPLETED`, `FAILED`, or `STOPPED` state return `404`.
+Stops a process. Only processes in `PENDING`, `RUNNING`, or `PAUSED` state can be stopped. Stopping a `PAUSED` process automatically unblocks the worker so it can detect the stop signal. Processes already in `COMPLETED`, `FAILED`, or `STOPPED` state return `404`.
 
 **Path parameters**
 
@@ -344,4 +432,11 @@ To stop a running process:
 
 ```
 POST /process/stop/{id}         → status transitions to STOPPED
+```
+
+To pause and resume:
+
+```
+POST /process/pause/{id}        → status transitions to PAUSED  (only from RUNNING)
+POST /process/resume/{id}       → status transitions to RUNNING (only from PAUSED)
 ```

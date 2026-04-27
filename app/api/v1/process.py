@@ -142,6 +142,38 @@ def get_process_results(process_id: str, db: Session = Depends(get_db)):
 
     return build_process_response(process, result)
 
+@router.post(
+    "/pause/{process_id}",
+    response_model=ProcessResponse,
+)
+def pause_process(process_id: str, db: Session = Depends(get_db)):
+    process = process_service.pause_process(db, process_id)
+
+    if process is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Process not found or not running",
+        )
+
+    return build_process_response(process)
+
+
+@router.post(
+    "/resume/{process_id}",
+    response_model=ProcessResponse,
+)
+def resume_process(process_id: str, db: Session = Depends(get_db)):
+    process = process_service.resume_process(db, process_id)
+
+    if process is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Process not found or not paused",
+        )
+
+    return build_process_response(process)
+
+
 @router.get("/logs/{process_id}")
 def get_process_logs(process_id: str, db: Session = Depends(get_db)):
     logs = process_service.list_process_logs(db, process_id)

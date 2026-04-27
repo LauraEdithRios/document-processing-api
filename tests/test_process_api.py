@@ -156,6 +156,52 @@ def test_process_results_empty_file(tmp_path, monkeypatch, client):
     assert data["results"]["total_words"] == 0
 
 
+def test_pause_process(client_no_bg, db_session):
+    from app.repositories import process_repository
+    from app.models.process_status import ProcessStatus
+
+    start_response = client_no_bg.post("/process/start")
+    process_id = start_response.json()["process_id"]
+
+    # Forzamos RUNNING directamente en la DB de test para poder pausar
+    process_repository.update_process_status(db_session, process_id, ProcessStatus.RUNNING.value)
+
+    response = client_no_bg.post(f"/process/pause/{process_id}")
+    assert response.status_code == 200
+    assert response.json()["status"] == "PAUSED"
+
+
+def test_resume_process(client_no_bg, db_session):
+    from app.repositories import process_repository
+    from app.models.process_status import ProcessStatus
+
+    start_response = client_no_bg.post("/process/start")
+    process_id = start_response.json()["process_id"]
+
+    process_repository.update_process_status(db_session, process_id, ProcessStatus.RUNNING.value)
+    client_no_bg.post(f"/process/pause/{process_id}")
+
+    response = client_no_bg.post(f"/process/resume/{process_id}")
+    assert response.status_code == 200
+    assert response.json()["status"] == "RUNNING"
+
+
+def test_pause_non_running_process(client_no_bg):
+    start_response = client_no_bg.post("/process/start")
+    process_id = start_response.json()["process_id"]
+    # Proceso en PENDING → pause debe fallar
+    response = client_no_bg.post(f"/process/pause/{process_id}")
+    assert response.status_code == 404
+
+
+def test_resume_non_paused_process(client_no_bg):
+    start_response = client_no_bg.post("/process/start")
+    process_id = start_response.json()["process_id"]
+    # Proceso en PENDING → resume debe fallar
+    response = client_no_bg.post(f"/process/resume/{process_id}")
+    assert response.status_code == 404
+
+
 def test_internal_error_handling(db_session, monkeypatch):
     # raise_server_exceptions=False: devuelve 500 en vez de re-lanzar la excepción
     from app.core.database import get_db
