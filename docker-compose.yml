@@ -1,0 +1,11 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - db_data:/app/storage
+      - ./data/texts:/app/data/texts
+
+volumes:
+  db_data:
