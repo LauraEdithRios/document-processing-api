@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import uuid4
@@ -11,19 +12,16 @@ from app.models.process_status import ProcessStatus
 from app.repositories import process_repository
 from app.workers.document_worker import process_documents
 
+logger = logging.getLogger(__name__)
+
 
 class ProcessStoppedError(Exception):
     """Raised by the worker when it detects the process was manually stopped."""
 
 
 def start_process(db: Session) -> Process:
-    """
-    Crea un nuevo proceso y lo deja en estado PENDING.
-    El procesamiento real se ejecuta después en background.
-    """
     process_id = str(uuid4())
 
-    # Valida que no exista un proceso con el mismo ID 
     if process_repository.get_process_by_id(db, process_id):
         process_repository.add_activity_log(db, process_id, "Intento de crear proceso duplicado", level="ERROR")
         raise ValueError("Ya existe un proceso con ese ID")
@@ -45,9 +43,11 @@ def start_process(db: Session) -> Process:
             message="Process created with PENDING status",
             level="INFO"
         )
+        logger.info("process created", extra={"process_id": process_id, "status": ProcessStatus.PENDING.value})
         return created_process
     except Exception as e:
         process_repository.add_activity_log(db, process_id, f"Error al crear proceso: {str(e)}", level="ERROR")
+        logger.error("process creation failed", extra={"process_id": process_id, "error": str(e)})
         raise
 
 
@@ -57,7 +57,6 @@ def get_process_status(
 ) -> Optional[Process]:
     if not process_id:
         raise ValueError("process_id no puede ser None")
-    # Valida formato UUID
     try:
         import uuid
         uuid.UUID(process_id)
@@ -80,6 +79,7 @@ def stop_process(
     process = process_repository.get_process_by_id(db, process_id)
     if process is None:
         process_repository.add_activity_log(db, process_id, "Intento de detener proceso inexistente", level="ERROR")
+        logger.warning("stop requested on unknown process", extra={"process_id": process_id})
         return None
 
     stoppable = [
@@ -89,9 +89,12 @@ def stop_process(
     ]
     if process.status not in stoppable:
         process_repository.add_activity_log(db, process_id, f"Intento de detener proceso en estado {process.status}", level="WARNING")
+        logger.warning(
+            "stop rejected: invalid state",
+            extra={"process_id": process_id, "status": process.status},
+        )
         return None
 
-    # Si estaba pausado, desbloqueamos el worker para que pueda detectar el stop
     if process.status == ProcessStatus.PAUSED.value:
         process_signals.resume(process_id)
 
@@ -101,11 +104,8 @@ def stop_process(
         status=ProcessStatus.STOPPED.value,
     )
 
-    process_repository.add_activity_log(
-        db=db,
-        process_id=process_id,
-        message="Process manually stopped",
-    )
+    process_repository.add_activity_log(db=db, process_id=process_id, message="Process manually stopped")
+    logger.info("process stopped", extra={"process_id": process_id, "status": ProcessStatus.STOPPED.value})
 
     return updated_process
 
@@ -113,22 +113,32 @@ def stop_process(
 def pause_process(db: Session, process_id: str) -> Optional[Process]:
     process = process_repository.get_process_by_id(db, process_id)
     if process is None or process.status != ProcessStatus.RUNNING.value:
+        logger.warning(
+            "pause rejected: process not running",
+            extra={"process_id": process_id, "status": process.status if process else None},
+        )
         return None
 
     process_signals.pause(process_id)
     updated = process_repository.update_process_status(db, process_id, ProcessStatus.PAUSED.value)
     process_repository.add_activity_log(db, process_id, "Process paused")
+    logger.info("process paused", extra={"process_id": process_id, "status": ProcessStatus.PAUSED.value})
     return updated
 
 
 def resume_process(db: Session, process_id: str) -> Optional[Process]:
     process = process_repository.get_process_by_id(db, process_id)
     if process is None or process.status != ProcessStatus.PAUSED.value:
+        logger.warning(
+            "resume rejected: process not paused",
+            extra={"process_id": process_id, "status": process.status if process else None},
+        )
         return None
 
     process_signals.resume(process_id)
     updated = process_repository.update_process_status(db, process_id, ProcessStatus.RUNNING.value)
     process_repository.add_activity_log(db, process_id, "Process resumed")
+    logger.info("process resumed", extra={"process_id": process_id, "status": ProcessStatus.RUNNING.value})
     return updated
 
 
@@ -145,15 +155,9 @@ def get_process_result(
 
 
 def _execute_process(process_id: str, db: Session) -> None:
-    """
-    Lógica central del procesamiento. Usa la sesión db recibida como parámetro,
-    lo que permite inyectar una sesión de test sin tocar el ciclo HTTP.
-    """
     event = process_signals.register(process_id)
 
     def check_pause():
-        # Bloquea mientras el evento esté cleared (proceso pausado).
-        # Al desbloquearse, verifica si fue detenido manualmente.
         event.wait()
         current = process_repository.get_process_by_id(db, process_id)
         if current and current.status == ProcessStatus.STOPPED.value:
@@ -165,14 +169,14 @@ def _execute_process(process_id: str, db: Session) -> None:
             process_id=process_id,
             status=ProcessStatus.RUNNING.value,
         )
-
         process_repository.add_activity_log(
             db=db,
             process_id=process_id,
             message="Process started in background",
         )
+        logger.info("process running", extra={"process_id": process_id, "status": ProcessStatus.RUNNING.value})
 
-        result_data = process_documents(pause_check=check_pause)
+        result_data = process_documents(pause_check=check_pause, process_id=process_id)
 
         process_repository.update_process_progress(
             db=db,
@@ -192,17 +196,22 @@ def _execute_process(process_id: str, db: Session) -> None:
         )
 
         process_repository.save_process_result(db, result)
-
         process_repository.update_process_status(
             db=db,
             process_id=process_id,
             status=ProcessStatus.COMPLETED.value,
         )
-
         process_repository.add_activity_log(
             db=db,
             process_id=process_id,
             message="Process completed successfully",
+        )
+        logger.info(
+            "process completed",
+            extra={
+                "process_id": process_id,
+                "status": ProcessStatus.COMPLETED.value,
+            },
         )
 
     finally:
@@ -210,19 +219,12 @@ def _execute_process(process_id: str, db: Session) -> None:
 
 
 def run_process_in_background(process_id: str) -> None:
-    """
-    Ejecuta el procesamiento de documentos en segundo plano.
-
-    Importante:
-    - No reutilizo la sesión del endpoint.
-    - Creo una sesión nueva porque este código corre fuera del ciclo HTTP.
-    """
     db = SessionLocal()
 
     try:
         _execute_process(process_id, db)
     except ProcessStoppedError:
-        pass  # El proceso fue detenido manualmente; el estado ya es STOPPED en DB.
+        logger.info("process stopped by user", extra={"process_id": process_id, "status": ProcessStatus.STOPPED.value})
     except Exception as exc:
         process_repository.update_process_status(
             db=db,
@@ -230,14 +232,16 @@ def run_process_in_background(process_id: str) -> None:
             status=ProcessStatus.FAILED.value,
             error_message=str(exc),
         )
-
         process_repository.add_activity_log(
             db=db,
             process_id=process_id,
             message=f"Process failed: {str(exc)}",
             level="ERROR",
         )
-
+        logger.error(
+            "process failed",
+            extra={"process_id": process_id, "status": ProcessStatus.FAILED.value, "error": str(exc)},
+        )
     finally:
         db.close()
 
@@ -248,5 +252,4 @@ def list_process_logs(db: Session, process_id: str):
     if process is None:
         return None
 
-    return process_repository.list_activity_logs(db, process_id)     
-
+    return process_repository.list_activity_logs(db, process_id)

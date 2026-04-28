@@ -1,13 +1,12 @@
+import logging
 import re
 from collections import Counter
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
+logger = logging.getLogger(__name__)
 
-# Cantidad de archivos que se procesan por lote.
 DEFAULT_BATCH_SIZE = 2
-
-# Carpeta desde donde el worker va a leer los archivos .txt.
 DEFAULT_TEXTS_FOLDER = "data/texts"
 
 
@@ -19,9 +18,6 @@ def get_text_files(folder_path: str = DEFAULT_TEXTS_FOLDER) -> List[Path]:
 
 
 def split_into_batches(files: List[Path], batch_size: int = DEFAULT_BATCH_SIZE) -> List[List[Path]]:
-    """
-    Divide la lista de archivos en grupos más chicos.
-    """
     return [
         files[index:index + batch_size]
         for index in range(0, len(files), batch_size)
@@ -29,17 +25,11 @@ def split_into_batches(files: List[Path], batch_size: int = DEFAULT_BATCH_SIZE) 
 
 
 def normalize_words(text: str) -> List[str]:
-    """
-    Limpia el texto y extrae palabras. Todo a minuscula, sin números ni caracteres especiales, y con al menos 2 letras.
-    """
     words = re.findall(r"\b[a-zA-Z]{2,}\b", text.lower())
     return words
 
 
 def analyze_text(text: str) -> Dict:
-    """
-    Analiza un texto y calcula cantidad de palabras, líneas, caracteres y frecuencia de palabras.
-    """
     lines = text.splitlines()
     words = normalize_words(text)
 
@@ -52,9 +42,6 @@ def analyze_text(text: str) -> Dict:
 
 
 def generate_summary(text: str, max_sentences: int = 3) -> str:
-    """
-    Genera un resumen básico tomando las 3 primeras frases del texto.
-    """
     sentences = re.split(r"(?<=[.!?])\s+", text.strip())
 
     clean_sentences = [
@@ -70,17 +57,8 @@ def process_documents(
     folder_path: str = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
     pause_check=None,
+    process_id: Optional[str] = None,
 ) -> Dict:
-    """
-    Procesa todos los archivos .txt de la carpeta indicada.
-
-    La función:
-    - busca archivos
-    - los divide en batches
-    - calcula estadísticas por archivo
-    - acumula resultados generales
-    - devuelve un resumen final del proceso
-    """
     if folder_path is None:
         folder_path = DEFAULT_TEXTS_FOLDER
 
@@ -88,6 +66,11 @@ def process_documents(
 
     if not files:
         raise FileNotFoundError("No se encontraron archivos para procesar")
+
+    logger.info(
+        "worker started",
+        extra={"process_id": process_id, "file": f"{len(files)} files found"},
+    )
 
     batches = split_into_batches(files, batch_size)
     total_words = 0
@@ -105,12 +88,21 @@ def process_documents(
                 continue
             try:
                 text = file_path.read_text(encoding="utf-8")
-            except Exception:
+            except Exception as exc:
+                logger.error(
+                    "file read failed",
+                    extra={"process_id": process_id, "file": file_path.name, "error": str(exc)},
+                )
                 continue
             try:
                 analysis = analyze_text(text)
-            except Exception:
+            except Exception as exc:
+                logger.error(
+                    "file analysis failed",
+                    extra={"process_id": process_id, "file": file_path.name, "error": str(exc)},
+                )
                 continue
+
             total_words += analysis["total_words"]
             total_lines += analysis["total_lines"]
             total_characters += analysis["total_characters"]
@@ -120,10 +112,25 @@ def process_documents(
             if summary:
                 summaries.append(f"{file_path.name}: {summary}")
 
+            logger.info(
+                "file processed",
+                extra={
+                    "process_id": process_id,
+                    "file": file_path.name,
+                    "words": analysis["total_words"],
+                    "lines": analysis["total_lines"],
+                },
+            )
+
     most_frequent_words = [
         word
         for word, _ in global_word_frequencies.most_common(5)
     ]
+
+    logger.info(
+        "worker completed",
+        extra={"process_id": process_id, "file": f"{len(files_processed)}/{len(files)} files processed"},
+    )
 
     return {
         "total_files": len(files),
