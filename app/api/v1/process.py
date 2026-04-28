@@ -1,9 +1,10 @@
 import json
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.orm import Session
 from app.core.database import get_db
+from app.core.ws_manager import manager as ws_manager
 from app.schemas.process import (
     ProcessListItemResponse,
     ProcessResponse,
@@ -60,6 +61,7 @@ def build_process_response(process, result=None) -> ProcessResponse:
         status=process.status,
         progress=build_progress_response(process),
         started_at=process.started_at,
+        completed_at=process.completed_at,
         estimated_completion=_estimate_completion(process),
         results=result_response,
     )
@@ -174,6 +176,12 @@ def resume_process(process_id: str, db: Session = Depends(get_db)):
     return build_process_response(process)
 
 
+@router.delete("/clear", status_code=status.HTTP_200_OK)
+def clear_finished(db: Session = Depends(get_db)):
+    deleted = process_service.clear_finished_processes(db)
+    return {"deleted": deleted}
+
+
 @router.get("/logs/{process_id}")
 def get_process_logs(process_id: str, db: Session = Depends(get_db)):
     logs = process_service.list_process_logs(db, process_id)
@@ -191,3 +199,15 @@ def get_process_logs(process_id: str, db: Session = Depends(get_db)):
         }
         for log in logs
     ]
+
+
+@router.websocket("/ws/{process_id}")
+async def process_ws(process_id: str, websocket: WebSocket):
+    await ws_manager.connect(process_id, websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await ws_manager.disconnect(process_id, websocket)

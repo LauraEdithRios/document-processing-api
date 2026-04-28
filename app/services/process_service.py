@@ -11,6 +11,7 @@ from app.models.process_result import ProcessResult
 from app.models.process_status import ProcessStatus
 from app.repositories import process_repository
 from app.workers.document_worker import process_documents
+from app.core.ws_manager import manager as ws_manager
 
 logger = logging.getLogger(__name__)
 
@@ -158,10 +159,21 @@ def _execute_process(process_id: str, db: Session) -> None:
     event = process_signals.register(process_id)
 
     def check_pause():
-        event.wait()
+        while not event.wait(timeout=0.5):
+            if process_signals.is_shutdown():
+                raise ProcessStoppedError(process_id)
         current = process_repository.get_process_by_id(db, process_id)
         if current and current.status == ProcessStatus.STOPPED.value:
             raise ProcessStoppedError(process_id)
+
+    def progress_callback(processed: int, total: int) -> None:
+        pct = round(processed / total * 100) if total > 0 else 0
+        process_repository.update_process_progress(db, process_id, processed, total)
+        ws_manager.broadcast_from_thread(process_id, {
+            "type": "progress",
+            "status": ProcessStatus.RUNNING.value,
+            "progress": {"total_files": total, "processed_files": processed, "percentage": pct},
+        })
 
     try:
         process_repository.update_process_status(
@@ -175,8 +187,17 @@ def _execute_process(process_id: str, db: Session) -> None:
             message="Process started in background",
         )
         logger.info("process running", extra={"process_id": process_id, "status": ProcessStatus.RUNNING.value})
+        ws_manager.broadcast_from_thread(process_id, {
+            "type": "status",
+            "status": ProcessStatus.RUNNING.value,
+            "progress": {"total_files": 0, "processed_files": 0, "percentage": 0},
+        })
 
-        result_data = process_documents(pause_check=check_pause, process_id=process_id)
+        result_data = process_documents(
+            pause_check=check_pause,
+            process_id=process_id,
+            progress_callback=progress_callback,
+        )
 
         process_repository.update_process_progress(
             db=db,
@@ -208,11 +229,17 @@ def _execute_process(process_id: str, db: Session) -> None:
         )
         logger.info(
             "process completed",
-            extra={
-                "process_id": process_id,
-                "status": ProcessStatus.COMPLETED.value,
-            },
+            extra={"process_id": process_id, "status": ProcessStatus.COMPLETED.value},
         )
+        ws_manager.broadcast_from_thread(process_id, {
+            "type": "status",
+            "status": ProcessStatus.COMPLETED.value,
+            "progress": {
+                "total_files": result_data["total_files"],
+                "processed_files": result_data["processed_files"],
+                "percentage": 100,
+            },
+        })
 
     finally:
         process_signals.unregister(process_id)
@@ -225,6 +252,11 @@ def run_process_in_background(process_id: str) -> None:
         _execute_process(process_id, db)
     except ProcessStoppedError:
         logger.info("process stopped by user", extra={"process_id": process_id, "status": ProcessStatus.STOPPED.value})
+        ws_manager.broadcast_from_thread(process_id, {
+            "type": "status",
+            "status": ProcessStatus.STOPPED.value,
+            "progress": {"total_files": 0, "processed_files": 0, "percentage": 0},
+        })
     except Exception as exc:
         process_repository.update_process_status(
             db=db,
@@ -242,8 +274,17 @@ def run_process_in_background(process_id: str) -> None:
             "process failed",
             extra={"process_id": process_id, "status": ProcessStatus.FAILED.value, "error": str(exc)},
         )
+        ws_manager.broadcast_from_thread(process_id, {
+            "type": "status",
+            "status": ProcessStatus.FAILED.value,
+            "progress": {"total_files": 0, "processed_files": 0, "percentage": 0},
+        })
     finally:
         db.close()
+
+
+def clear_finished_processes(db: Session) -> int:
+    return process_repository.delete_finished_processes(db)
 
 
 def list_process_logs(db: Session, process_id: str):

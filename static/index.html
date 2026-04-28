@@ -322,7 +322,10 @@
 
 <header>
   <h1>Document Processing API</h1>
-  <button class="btn btn-primary" onclick="startProcess()">+ Start Process</button>
+  <div style="display:flex;gap:8px">
+    <button class="btn btn-ghost" onclick="clearFinished()">Clear finished</button>
+    <button class="btn btn-primary" onclick="startProcess()">+ Start Process</button>
+  </div>
 </header>
 
 <main>
@@ -351,12 +354,53 @@
 <script>
   let selectedId = null;
   let pollTimer  = null;
+  const sockets  = {};  // process_id → WebSocket
+
+  // ── WebSocket ──────────────────────────────────────────────
+
+  function connectWS(id) {
+    if (sockets[id]) return;
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${proto}//${location.host}/process/ws/${id}`);
+    sockets[id] = ws;
+
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      updateRow(id, msg);
+      if (selectedId === id) loadDetail(id);
+      if (['COMPLETED', 'FAILED', 'STOPPED'].includes(msg.status)) {
+        disconnectWS(id);
+        refresh();
+      }
+    };
+
+    ws.onclose = ws.onerror = () => { delete sockets[id]; };
+  }
+
+  function disconnectWS(id) {
+    if (sockets[id]) { sockets[id].close(); delete sockets[id]; }
+  }
+
+  function updateRow(id, data) {
+    const row = document.getElementById(`row-${id}`);
+    if (!row) return;
+    const prevStatus = row.dataset.status;
+    row.className = row.className.replace(/\bs-\S+/g, `s-${data.status}`);
+    row.dataset.status = data.status;
+    const cells = row.querySelectorAll('td');
+    if (cells.length < 3) return;
+    cells[1].innerHTML = statusCell(data.status);
+    if (data.progress) cells[2].innerHTML = progressBar(data.progress, data.status);
+    if (!prevStatus || prevStatus !== data.status) {
+      cells[cells.length - 1].innerHTML = actionBtns({ process_id: id, status: data.status });
+    }
+  }
 
   // ── API ────────────────────────────────────────────────────
 
   async function call(method, path) {
     try {
-      const res = await fetch(path, { method });
+      const res = await fetch(path, { method, cache: 'no-store' });
       if (!res.ok) return null;
       return res.json();
     } catch { return null; }
@@ -364,9 +408,38 @@
 
   // ── Actions ────────────────────────────────────────────────
 
+  async function clearFinished() {
+    const btn = document.querySelector('header .btn-ghost');
+    btn.disabled = true;
+    try {
+      const res = await call('DELETE', '/process/clear');
+      if (!res) return;
+      if (res.deleted > 0 && ['COMPLETED','FAILED','STOPPED'].includes(
+          document.getElementById(`row-${selectedId}`)?.dataset.status)) {
+        closeDetail();
+      }
+      await refresh();
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
   async function startProcess() {
-    await call('POST', '/process/start');
-    refresh();
+    const btn = document.querySelector('header .btn-primary');
+    btn.disabled = true;
+    try {
+      const created = await call('POST', '/process/start');
+      if (!created) return;
+      if (!pollTimer) pollTimer = setInterval(refresh, 500);
+      await refresh();
+      const row = document.getElementById(`row-${created.process_id}`);
+      if (row) {
+        selectProcess(created.process_id);
+        row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    } finally {
+      btn.disabled = false;
+    }
   }
 
   async function selectProcess(id) {
@@ -435,12 +508,30 @@
       btns.push(`<button class="btn btn-success" data-action="resume" data-id="${id}">▶ Resume</button>`);
     if (['PENDING','RUNNING','PAUSED'].includes(s))
       btns.push(`<button class="btn btn-danger" data-action="stop" data-id="${id}">■ Stop</button>`);
-    return `<div class="actions">${btns.join('')}</div>`;
+    return btns.length
+      ? `<div class="actions">${btns.join('')}</div>`
+      : `<span style="color:var(--dim);font-size:12px">—</span>`;
   }
 
   function fmt(iso) {
     if (!iso) return '—';
-    return new Date(iso).toLocaleTimeString();
+    const utc = iso.endsWith('Z') || iso.includes('+') ? iso : iso + 'Z';
+    return new Date(utc).toLocaleTimeString();
+  }
+
+  function toUtcDate(iso) {
+    if (!iso) return null;
+    const utc = iso.endsWith('Z') || iso.includes('+') ? iso : iso + 'Z';
+    return new Date(utc);
+  }
+
+  function duration(started, completed) {
+    const a = toUtcDate(started), b = toUtcDate(completed);
+    if (!a || !b) return '—';
+    const s = Math.round((b - a) / 1000);
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60), rem = s % 60;
+    return rem > 0 ? `${m}m ${rem}s` : `${m}m`;
   }
 
   function shortId(id) { return id.substring(0, 8) + '…'; }
@@ -464,11 +555,13 @@
     const rows = processes.map(p => `
       <tr class="clickable s-${p.status}${selectedId === p.process_id ? ' selected' : ''}"
           id="row-${p.process_id}"
-          data-action="select" data-id="${p.process_id}">
+          data-action="select" data-id="${p.process_id}" data-status="${p.status}">
         <td><code style="font-size:11px;color:var(--muted);font-family:monospace">${shortId(p.process_id)}</code></td>
         <td>${statusCell(p.status)}</td>
         <td>${progressBar(p.progress, p.status)}</td>
         <td style="color:var(--muted);font-size:12px">${fmt(p.started_at)}</td>
+        <td style="color:var(--muted);font-size:12px">${fmt(p.completed_at)}</td>
+        <td style="color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums">${duration(p.started_at, p.completed_at)}</td>
         <td>${actionBtns(p)}</td>
       </tr>`).join('');
 
@@ -476,11 +569,16 @@
       <table>
         <thead>
           <tr>
-            <th>ID</th><th>Status</th><th>Progress</th><th>Started</th><th>Actions</th>
+            <th>ID</th><th>Status</th><th>Progress</th><th>Started</th><th>Completed</th><th>Duration</th><th>Actions</th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
       </table>`;
+
+    processes.forEach(p => {
+      if (['PENDING', 'RUNNING', 'PAUSED'].includes(p.status)) connectWS(p.process_id);
+      else disconnectWS(p.process_id);
+    });
   }
 
   // ── Render detail ──────────────────────────────────────────
@@ -546,7 +644,11 @@
         <div class="meta-group">
           <h3>Timing</h3>
           <div class="meta-row"><span class="meta-key">Started at</span><span class="meta-val">${fmt(proc.started_at)}</span></div>
-          <div class="meta-row"><span class="meta-key">Est. completion</span><span class="meta-val">${fmt(proc.estimated_completion)}</span></div>
+          ${proc.completed_at
+            ? `<div class="meta-row"><span class="meta-key">Completed at</span><span class="meta-val">${fmt(proc.completed_at)}</span></div>
+               <div class="meta-row"><span class="meta-key">Duration</span><span class="meta-val">${duration(proc.started_at, proc.completed_at)}</span></div>`
+            : `<div class="meta-row"><span class="meta-key">Est. completion</span><span class="meta-val">${fmt(proc.estimated_completion)}</span></div>`
+          }
         </div>
       </div>
       ${wordChips}
@@ -565,7 +667,7 @@
 
     const active = processes.some(p => ['PENDING','RUNNING','PAUSED'].includes(p.status));
     if (active && !pollTimer) {
-      pollTimer = setInterval(refresh, 2000);
+      pollTimer = setInterval(refresh, 500);
     } else if (!active && pollTimer) {
       clearInterval(pollTimer);
       pollTimer = null;

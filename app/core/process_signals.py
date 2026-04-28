@@ -3,6 +3,7 @@ from typing import Dict
 
 _events: Dict[str, threading.Event] = {}
 _lock = threading.Lock()
+_shutdown = threading.Event()
 
 
 def register(process_id: str) -> threading.Event:
@@ -28,3 +29,15 @@ def resume(process_id: str) -> None:
 def unregister(process_id: str) -> None:
     with _lock:
         _events.pop(process_id, None)
+
+
+def shutdown() -> None:
+    """Unblocks all paused workers so threads can exit cleanly on server shutdown."""
+    _shutdown.set()
+    with _lock:
+        for event in _events.values():
+            event.set()
+
+
+def is_shutdown() -> bool:
+    return _shutdown.is_set()

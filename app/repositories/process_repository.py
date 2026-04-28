@@ -126,3 +126,18 @@ def list_activity_logs(
         .order_by(ActivityLog.created_at.asc())
         .all()
     )
+
+
+def delete_finished_processes(db: Session) -> int:
+    terminal = ["COMPLETED", "FAILED", "STOPPED"]
+    ids = [
+        p.id
+        for p in db.query(Process.id).filter(Process.status.in_(terminal)).all()
+    ]
+    if not ids:
+        return 0
+    db.query(ActivityLog).filter(ActivityLog.process_id.in_(ids)).delete(synchronize_session=False)
+    db.query(ProcessResult).filter(ProcessResult.process_id.in_(ids)).delete(synchronize_session=False)
+    db.query(Process).filter(Process.id.in_(ids)).delete(synchronize_session=False)
+    db.commit()
+    return len(ids)

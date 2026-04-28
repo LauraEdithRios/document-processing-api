@@ -10,7 +10,10 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_BATCH_SIZE = 2
 DEFAULT_TEXTS_FOLDER = "data/texts"
-FILE_DELAY = float(os.getenv("WORKER_FILE_DELAY", "0"))
+
+
+def _file_delay() -> float:
+    return float(os.getenv("WORKER_FILE_DELAY", "0"))
 
 
 def get_text_files(folder_path: str = DEFAULT_TEXTS_FOLDER) -> List[Path]:
@@ -61,6 +64,7 @@ def process_documents(
     batch_size: int = DEFAULT_BATCH_SIZE,
     pause_check=None,
     process_id: Optional[str] = None,
+    progress_callback=None,
 ) -> Dict:
     if folder_path is None:
         folder_path = DEFAULT_TEXTS_FOLDER
@@ -115,8 +119,12 @@ def process_documents(
             if summary:
                 summaries.append(f"{file_path.name}: {summary}")
 
-            if FILE_DELAY > 0:
-                time.sleep(FILE_DELAY)
+            if progress_callback:
+                progress_callback(len(files_processed), len(files))
+
+            delay = _file_delay()
+            if delay > 0:
+                time.sleep(delay)
 
             logger.info(
                 "file processed",

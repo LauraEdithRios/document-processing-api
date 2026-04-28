@@ -1,5 +1,7 @@
+import asyncio
 import logging
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, status
 from fastapi.requests import Request
@@ -9,6 +11,8 @@ from fastapi.staticfiles import StaticFiles
 from app.api.v1.process import router as process_router
 from app.core.database import Base, engine
 from app.core.logging_config import setup_logging
+from app.core import process_signals
+from app.core.ws_manager import manager as ws_manager
 from app.models.activity_log import ActivityLog
 from app.models.process import Process
 from app.models.process_result import ProcessResult
@@ -19,10 +23,18 @@ logger = logging.getLogger(__name__)
 
 Base.metadata.create_all(bind=engine)
 
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    ws_manager.set_loop(asyncio.get_running_loop())
+    yield
+    process_signals.shutdown()
+
+
 app = FastAPI(
     title="Document Processing API",
     description="Asynchronous document processing system with process tracking",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -61,4 +73,4 @@ async def value_error_handler(request: Request, exc: ValueError):
 
 @app.get("/", include_in_schema=False)
 def ui():
-    return FileResponse("static/index.html")
+    return FileResponse("static/index.html", headers={"Cache-Control": "no-store"})

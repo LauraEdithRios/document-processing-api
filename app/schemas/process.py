@@ -23,6 +23,7 @@ class ProcessResponse(BaseModel):
     status: str
     progress: ProgressResponse
     started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
     estimated_completion: Optional[datetime] = None
     results: Optional[ProcessResultResponse] = None
 
