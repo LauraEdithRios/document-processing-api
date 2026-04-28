@@ -3,9 +3,10 @@ services:
     build: .
     ports:
       - "8000:8000"
+    environment:
+      - WORKER_FILE_DELAY=0.5
     volumes:
       - db_data:/app/storage
       - ./data/texts:/app/data/texts
-
 volumes:
   db_data:

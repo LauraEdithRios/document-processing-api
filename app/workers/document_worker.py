@@ -1,5 +1,7 @@
 import logging
+import os
 import re
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -8,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_BATCH_SIZE = 2
 DEFAULT_TEXTS_FOLDER = "data/texts"
+FILE_DELAY = float(os.getenv("WORKER_FILE_DELAY", "0"))
 
 
 def get_text_files(folder_path: str = DEFAULT_TEXTS_FOLDER) -> List[Path]:
@@ -111,6 +114,9 @@ def process_documents(
             summary = generate_summary(text)
             if summary:
                 summaries.append(f"{file_path.name}: {summary}")
+
+            if FILE_DELAY > 0:
+                time.sleep(FILE_DELAY)
 
             logger.info(
                 "file processed",

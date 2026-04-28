@@ -3,7 +3,8 @@ import time
 
 from fastapi import FastAPI, status
 from fastapi.requests import Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.process import router as process_router
 from app.core.database import Base, engine
@@ -23,6 +24,10 @@ app = FastAPI(
     description="Asynchronous document processing system with process tracking",
     version="1.0.0",
 )
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+app.include_router(process_router, prefix="/process", tags=["Process"])
 
 
 @app.middleware("http")
@@ -54,5 +59,6 @@ async def value_error_handler(request: Request, exc: ValueError):
         content={"detail": str(exc)},
     )
 
-
-app.include_router(process_router, prefix="/process", tags=["Process"])
+@app.get("/", include_in_schema=False)
+def ui():
+    return FileResponse("static/index.html")

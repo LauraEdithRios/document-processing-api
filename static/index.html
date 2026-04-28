@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Document Processing API</title>
+  <style>
+    :root {
+      --bg:      #0a0a0f;
+      --surface: #13131a;
+      --border:  #1e1e2e;
+      --text:    #e2e2f0;
+      --muted:   #6b6b8a;
+      --dim:     #3d3d55;
+      --accent:  #6366f1;
+      --green:   #10b981;
+      --amber:   #f59e0b;
+      --red:     #ef4444;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    /* ── Header ─────────────────────────────────────────── */
+    header {
+      background: var(--surface);
+      padding: 14px 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    header::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0; right: 0; height: 1px;
+      background: linear-gradient(90deg, var(--accent), var(--green), transparent 60%);
+    }
+
+    header h1 { font-size: 14px; font-weight: 600; letter-spacing: -.01em; }
+
+    /* ── Layout ─────────────────────────────────────────── */
+    main {
+      max-width: 1100px;
+      margin: 28px auto;
+      padding: 0 24px;
+      display: grid;
+      gap: 20px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .card-header {
+      padding: 13px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .card-header h2 {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--dim);
+    }
+
+    /* ── Buttons ─────────────────────────────────────────── */
+    .btn {
+      padding: 6px 13px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+      transition: opacity .15s, transform .1s;
+    }
+    .btn:hover  { opacity: .82; }
+    .btn:active { transform: scale(.97); }
+
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-danger  { background: rgba(239,68,68,.12);  color: #f87171; border: 1px solid rgba(239,68,68,.25); }
+    .btn-warning { background: rgba(245,158,11,.12); color: #fbbf24; border: 1px solid rgba(245,158,11,.25); }
+    .btn-success { background: rgba(16,185,129,.12); color: #34d399; border: 1px solid rgba(16,185,129,.25); }
+    .btn-ghost   { background: rgba(255,255,255,.04); color: var(--muted); border: 1px solid var(--border); }
+
+    /* ── Table ───────────────────────────────────────────── */
+    table { width: 100%; border-collapse: collapse; }
+
+    th {
+      text-align: left;
+      padding: 8px 16px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--dim);
+      border-bottom: 1px solid var(--border);
+    }
+
+    td {
+      padding: 11px 16px;
+      font-size: 13px;
+      border-bottom: 1px solid rgba(255,255,255,.03);
+      vertical-align: middle;
+    }
+
+    tr:last-child td { border-bottom: none; }
+    tr.clickable { cursor: pointer; transition: background .1s; }
+    tr.clickable:hover td { background: rgba(255,255,255,.025); }
+    tr.selected td { background: rgba(99,102,241,.07); }
+
+    /* Left accent bar per status */
+    td:first-child { border-left: 2px solid transparent; padding-left: 14px; }
+    tr.s-PENDING   td:first-child { border-left-color: var(--amber); }
+    tr.s-RUNNING   td:first-child { border-left-color: var(--accent); }
+    tr.s-PAUSED    td:first-child { border-left-color: var(--amber); }
+    tr.s-COMPLETED td:first-child { border-left-color: var(--green); }
+    tr.s-FAILED    td:first-child { border-left-color: var(--red); }
+    tr.s-STOPPED   td:first-child { border-left-color: var(--dim); }
+
+    /* ── Status cell ─────────────────────────────────────── */
+    .status-cell { display: flex; align-items: center; gap: 8px; }
+
+    .dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .dot-PENDING   { background: var(--amber); }
+    .dot-RUNNING   { background: var(--accent); animation: pulse-dot 1.4s ease-in-out infinite; }
+    .dot-PAUSED    { background: var(--amber); }
+    .dot-COMPLETED { background: var(--green); }
+    .dot-FAILED    { background: var(--red); }
+    .dot-STOPPED   { background: var(--dim); }
+
+    @keyframes pulse-dot {
+      0%,100% { box-shadow: 0 0 0 0 rgba(99,102,241,.6); }
+      50%     { box-shadow: 0 0 0 5px rgba(99,102,241,0); }
+    }
+
+    .status-text { font-size: 12px; font-weight: 500; }
+
+    /* ── Progress bar ────────────────────────────────────── */
+    .progress-wrap  { display: flex; align-items: center; gap: 10px; }
+    .progress-track {
+      flex: 1; height: 3px;
+      background: rgba(255,255,255,.06);
+      border-radius: 2px;
+      overflow: hidden;
+      min-width: 80px;
+    }
+
+    .progress-fill { height: 100%; border-radius: 2px; transition: width .5s ease; }
+
+    .fill-PENDING   { background: var(--dim); }
+    .fill-RUNNING   { background: linear-gradient(90deg, var(--accent), #818cf8); position: relative; overflow: hidden; }
+    .fill-PAUSED    { background: var(--amber); }
+    .fill-COMPLETED { background: var(--green); }
+    .fill-FAILED    { background: var(--red); }
+    .fill-STOPPED   { background: var(--dim); }
+
+    .fill-RUNNING::after {
+      content: '';
+      position: absolute;
+      top: 0; left: -100%; width: 60%; height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,.35), transparent);
+      animation: shimmer 1.5s infinite;
+    }
+
+    @keyframes shimmer { to { left: 200%; } }
+
+    .progress-label { font-size: 11px; color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+    .actions { display: flex; gap: 5px; }
+
+    /* ── Stats grid ──────────────────────────────────────── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1px;
+      background: var(--border);
+    }
+
+    .stat-block { background: var(--surface); padding: 20px 22px; }
+
+    .stat-number {
+      font-size: 30px;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: -.03em;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .stat-lbl {
+      font-size: 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .07em;
+      margin-top: 6px;
+    }
+
+    /* ── Detail meta ─────────────────────────────────────── */
+    .meta-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .meta-group { padding: 16px 20px; border-right: 1px solid var(--border); }
+    .meta-group:last-child { border-right: none; }
+
+    .meta-group h3 {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--dim);
+      margin-bottom: 10px;
+    }
+
+    .meta-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 5px 0;
+      font-size: 12px;
+      border-bottom: 1px solid rgba(255,255,255,.03);
+    }
+    .meta-row:last-child { border-bottom: none; }
+    .meta-key { color: var(--muted); }
+    .meta-val { font-weight: 500; font-variant-numeric: tabular-nums; }
+
+    /* ── Chips ───────────────────────────────────────────── */
+    .chips-section { padding: 12px 20px; border-bottom: 1px solid var(--border); }
+
+    .chips-label {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--dim);
+      margin-bottom: 8px;
+    }
+
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+    .chip-word {
+      background: rgba(99,102,241,.12);
+      color: #a5b4fc;
+      border: 1px solid rgba(99,102,241,.2);
+      padding: 3px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .chip-file {
+      background: rgba(16,185,129,.07);
+      color: #6ee7b7;
+      border: 1px solid rgba(16,185,129,.15);
+      padding: 3px 10px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-family: monospace;
+    }
+
+    /* ── Log ─────────────────────────────────────────────── */
+    .log-title {
+      padding: 12px 20px 6px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--dim);
+    }
+
+    .log-list {
+      list-style: none;
+      max-height: 160px;
+      overflow-y: auto;
+      padding: 0 20px 14px;
+    }
+
+    .log-list::-webkit-scrollbar { width: 3px; }
+    .log-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .log-list li {
+      padding: 5px 0;
+      border-bottom: 1px solid rgba(255,255,255,.03);
+      display: flex;
+      gap: 14px;
+      font-size: 12px;
+    }
+    .log-list li:last-child { border-bottom: none; }
+    .log-time { color: var(--dim); font-family: monospace; white-space: nowrap; }
+    .log-msg  { color: var(--muted); }
+
+    /* ── Empty ───────────────────────────────────────────── */
+    .empty { text-align: center; padding: 52px 24px; }
+    .empty strong { font-size: 14px; color: var(--muted); display: block; margin-bottom: 6px; }
+    .empty p { font-size: 13px; color: var(--dim); }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Document Processing API</h1>
+  <button class="btn btn-primary" onclick="startProcess()">+ Start Process</button>
+</header>
+
+<main>
+  <div class="card">
+    <div class="card-header">
+      <h2>Processes</h2>
+      <span id="process-count" style="font-size:11px;color:var(--dim)"></span>
+    </div>
+    <div id="list-container">
+      <div class="empty">
+        <strong>No processes</strong>
+        <p>Click "+ Start Process" to begin.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="detail-panel" style="display:none">
+    <div class="card-header">
+      <h2 id="detail-title" style="font-family:monospace;text-transform:none;letter-spacing:0;font-size:11px;color:var(--muted)">—</h2>
+      <button class="btn btn-ghost" style="font-size:11px;padding:3px 10px" onclick="closeDetail()">✕ Close</button>
+    </div>
+    <div id="detail-content"></div>
+  </div>
+</main>
+
+<script>
+  let selectedId = null;
+  let pollTimer  = null;
+
+  // ── API ────────────────────────────────────────────────────
+
+  async function call(method, path) {
+    try {
+      const res = await fetch(path, { method });
+      if (!res.ok) return null;
+      return res.json();
+    } catch { return null; }
+  }
+
+  // ── Actions ────────────────────────────────────────────────
+
+  async function startProcess() {
+    await call('POST', '/process/start');
+    refresh();
+  }
+
+  async function selectProcess(id) {
+    selectedId = id;
+    document.querySelectorAll('tr.clickable').forEach(r => r.classList.remove('selected'));
+    const row = document.getElementById(`row-${id}`);
+    if (row) row.classList.add('selected');
+    loadDetail(id);
+  }
+
+  function closeDetail() {
+    selectedId = null;
+    document.getElementById('detail-panel').style.display = 'none';
+    document.querySelectorAll('tr.clickable').forEach(r => r.classList.remove('selected'));
+  }
+
+  // Event delegation — survives re-renders because listener lives on a stable parent
+  document.getElementById('list-container').addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    e.stopPropagation();
+
+    const { action, id } = btn.dataset;
+
+    if (action === 'select') { selectedId === id ? closeDetail() : selectProcess(id); return; }
+
+    btn.disabled = true;
+    btn.style.opacity = '0.4';
+
+    if (action === 'stop')   await call('POST', `/process/stop/${id}`);
+    if (action === 'pause')  await call('POST', `/process/pause/${id}`);
+    if (action === 'resume') await call('POST', `/process/resume/${id}`);
+
+    await refresh();
+  });
+
+  // ── Helpers ────────────────────────────────────────────────
+
+  function statusCell(status) {
+    return `
+      <div class="status-cell">
+        <span class="dot dot-${status}"></span>
+        <span class="status-text">${status}</span>
+      </div>`;
+  }
+
+  function progressBar(p, status) {
+    const pct   = p.percentage ?? 0;
+    const label = p.total_files > 0 ? `${p.processed_files} / ${p.total_files}` : '—';
+    return `
+      <div class="progress-wrap">
+        <div class="progress-track">
+          <div class="progress-fill fill-${status}" style="width:${pct}%"></div>
+        </div>
+        <span class="progress-label">${label}</span>
+      </div>`;
+  }
+
+  function actionBtns(p) {
+    const id = p.process_id;
+    const s  = p.status;
+    const btns = [];
+    if (s === 'RUNNING')
+      btns.push(`<button class="btn btn-warning" data-action="pause" data-id="${id}">⏸ Pause</button>`);
+    if (s === 'PAUSED')
+      btns.push(`<button class="btn btn-success" data-action="resume" data-id="${id}">▶ Resume</button>`);
+    if (['PENDING','RUNNING','PAUSED'].includes(s))
+      btns.push(`<button class="btn btn-danger" data-action="stop" data-id="${id}">■ Stop</button>`);
+    return `<div class="actions">${btns.join('')}</div>`;
+  }
+
+  function fmt(iso) {
+    if (!iso) return '—';
+    return new Date(iso).toLocaleTimeString();
+  }
+
+  function shortId(id) { return id.substring(0, 8) + '…'; }
+
+  // ── Render list ────────────────────────────────────────────
+
+  function renderList(processes) {
+    const container = document.getElementById('list-container');
+    document.getElementById('process-count').textContent =
+      processes.length === 1 ? '1 process' : `${processes.length} processes`;
+
+    if (processes.length === 0) {
+      container.innerHTML = `
+        <div class="empty">
+          <strong>No processes</strong>
+          <p>Click "+ Start Process" to begin.</p>
+        </div>`;
+      return;
+    }
+
+    const rows = processes.map(p => `
+      <tr class="clickable s-${p.status}${selectedId === p.process_id ? ' selected' : ''}"
+          id="row-${p.process_id}"
+          data-action="select" data-id="${p.process_id}">
+        <td><code style="font-size:11px;color:var(--muted);font-family:monospace">${shortId(p.process_id)}</code></td>
+        <td>${statusCell(p.status)}</td>
+        <td>${progressBar(p.progress, p.status)}</td>
+        <td style="color:var(--muted);font-size:12px">${fmt(p.started_at)}</td>
+        <td>${actionBtns(p)}</td>
+      </tr>`).join('');
+
+    container.innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th><th>Status</th><th>Progress</th><th>Started</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+
+  // ── Render detail ──────────────────────────────────────────
+
+  async function loadDetail(id) {
+    const [proc, logs] = await Promise.all([
+      call('GET', `/process/results/${id}`),
+      call('GET', `/process/logs/${id}`),
+    ]);
+    if (!proc) return;
+
+    document.getElementById('detail-panel').style.display = 'block';
+    document.getElementById('detail-title').textContent = id;
+
+    const r = proc.results;
+
+    const statsHtml = r ? `
+      <div class="stats-grid">
+        <div class="stat-block">
+          <div class="stat-number">${r.total_words.toLocaleString()}</div>
+          <div class="stat-lbl">Words</div>
+        </div>
+        <div class="stat-block">
+          <div class="stat-number">${r.total_lines.toLocaleString()}</div>
+          <div class="stat-lbl">Lines</div>
+        </div>
+        <div class="stat-block">
+          <div class="stat-number">${r.total_characters.toLocaleString()}</div>
+          <div class="stat-lbl">Characters</div>
+        </div>
+        <div class="stat-block">
+          <div class="stat-number">${r.files_processed.length}</div>
+          <div class="stat-lbl">Files</div>
+        </div>
+      </div>` : '';
+
+    const wordChips = r
+      ? `<div class="chips-section">
+           <div class="chips-label">Top words</div>
+           <div class="chips">${r.most_frequent_words.map(w => `<span class="chip-word">${w}</span>`).join('')}</div>
+         </div>
+         <div class="chips-section">
+           <div class="chips-label">Files processed</div>
+           <div class="chips">${r.files_processed.map(f => `<span class="chip-file">${f}</span>`).join('')}</div>
+         </div>`
+      : '';
+
+    const logItems = (logs || []).map(l => `
+      <li>
+        <span class="log-time">${fmt(l.created_at)}</span>
+        <span class="log-msg">${l.message}</span>
+      </li>`).join('') || '<li><span class="log-msg" style="color:var(--dim)">No entries yet.</span></li>';
+
+    document.getElementById('detail-content').innerHTML = `
+      ${statsHtml}
+      <div class="meta-grid">
+        <div class="meta-group">
+          <h3>State</h3>
+          <div class="meta-row"><span class="meta-key">Status</span><span class="meta-val">${statusCell(proc.status)}</span></div>
+          <div class="meta-row"><span class="meta-key">Progress</span><span class="meta-val">${proc.progress.processed_files} / ${proc.progress.total_files}</span></div>
+          <div class="meta-row"><span class="meta-key">Percentage</span><span class="meta-val">${proc.progress.percentage}%</span></div>
+        </div>
+        <div class="meta-group">
+          <h3>Timing</h3>
+          <div class="meta-row"><span class="meta-key">Started at</span><span class="meta-val">${fmt(proc.started_at)}</span></div>
+          <div class="meta-row"><span class="meta-key">Est. completion</span><span class="meta-val">${fmt(proc.estimated_completion)}</span></div>
+        </div>
+      </div>
+      ${wordChips}
+      <div class="log-title">Activity Log</div>
+      <ul class="log-list">${logItems}</ul>`;
+  }
+
+  // ── Poll ───────────────────────────────────────────────────
+
+  async function refresh() {
+    const processes = await call('GET', '/process/list');
+    if (!processes) return;
+
+    renderList(processes);
+    if (selectedId) loadDetail(selectedId);
+
+    const active = processes.some(p => ['PENDING','RUNNING','PAUSED'].includes(p.status));
+    if (active && !pollTimer) {
+      pollTimer = setInterval(refresh, 2000);
+    } else if (!active && pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }
+
+  refresh();
+</script>
+</body>
+</html>
