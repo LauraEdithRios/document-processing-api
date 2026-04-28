@@ -1,245 +1,235 @@
-# API Documentation — Document Processing System
+# API Documentation — Document Processing API
 
-## Base URL
-
-
-http://localhost:8000
-
-
-## Interactive Documentation
-
-FastAPI generates automatic interactive docs at runtime:
-
-- Swagger UI: `http://localhost:8000/docs`
-- ReDoc: `http://localhost:8000/redoc`
+Base URL: `http://localhost:8000`  
+Interactive docs (Swagger UI): `http://localhost:8000/docs`  
+OpenAPI JSON: `http://localhost:8000/openapi.json`
 
 ---
 
-## Common Response Schemas
+## Authentication
+
+No authentication required. All endpoints are publicly accessible.
+
+---
+
+## Common Response Codes
+
+| Code | Meaning |
+|---|---|
+| `200 OK` | Request succeeded |
+| `201 Created` | Resource created successfully |
+| `404 Not Found` | Process ID does not exist |
+| `422 Unprocessable Entity` | Invalid input (e.g. malformed UUID) |
+| `500 Internal Server Error` | Unexpected server error |
+
+---
+
+## Schemas
 
 ### ProcessResponse
 
-Returned by `/start`, `/stop`, `/status`, and `/results`.
+Returned by most endpoints that operate on a single process.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `process_id` | `string (UUID)` | Unique process identifier |
-| `status` | `string` | Current state (see [Process States](#process-states)) |
-| `progress` | `ProgressResponse` | File processing counters |
-| `started_at` | `datetime \| null` | UTC timestamp when processing started |
-| `estimated_completion` | `datetime \| null` | Projected UTC completion time when `RUNNING`; `null` otherwise |
-| `results` | `ProcessResultResponse \| null` | Populated only when status is `COMPLETED` |
-
-### ProgressResponse
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `total_files` | `integer` | Total `.txt` files found |
-| `processed_files` | `integer` | Files successfully processed |
-| `percentage` | `integer` | Completion percentage (0–100) |
+```json
+{
+  "process_id":           "string (UUID)",
+  "status":               "PENDING | RUNNING | PAUSED | COMPLETED | FAILED | STOPPED",
+  "progress": {
+    "total_files":        "integer",
+    "processed_files":    "integer",
+    "percentage":         "integer (0–100)"
+  },
+  "started_at":           "ISO 8601 datetime | null",
+  "completed_at":         "ISO 8601 datetime | null",
+  "estimated_completion": "ISO 8601 datetime | null",
+  "results":              "ProcessResultResponse | null"
+}
+```
 
 ### ProcessResultResponse
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `total_words` | `integer` | Combined word count across all files |
-| `total_lines` | `integer` | Combined line count |
-| `total_characters` | `integer` | Combined character count |
-| `most_frequent_words` | `string[]` | Top 5 most frequent words |
-| `files_processed` | `string[]` | Names of successfully processed files |
-| `summary` | `string \| null` | First 3 sentences of each processed file |
+Present in `results` once status is `COMPLETED`.
+
+```json
+{
+  "total_words":          "integer",
+  "total_lines":          "integer",
+  "total_characters":     "integer",
+  "most_frequent_words":  ["string"],
+  "files_processed":      ["string"],
+  "summary":              "string | null"
+}
+```
 
 ### ProcessListItemResponse
 
-Returned by `/list`.
+Returned by `GET /process/list`.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `process_id` | `string (UUID)` | Unique process identifier |
-| `status` | `string` | Current state |
-| `progress` | `ProgressResponse` | File processing counters |
-| `created_at` | `datetime` | UTC timestamp of process creation |
-| `started_at` | `datetime \| null` | UTC timestamp when processing started |
-| `completed_at` | `datetime \| null` | UTC timestamp when process ended |
-
-### Error Response
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `detail` | `string` | Human-readable error message |
-
----
-
-## Process States
-
-| State | Description |
-|-------|-------------|
-| `PENDING` | Process created, waiting to start |
-| `RUNNING` | Processing documents |
-| `PAUSED` | Temporarily suspended; worker is blocked between file reads |
-| `COMPLETED` | Finished successfully |
-| `FAILED` | Terminated with error |
-| `STOPPED` | Manually stopped |
-
-**Valid transitions:**
-
-```
-PENDING → RUNNING
-
-RUNNING → COMPLETED
-RUNNING → FAILED
-RUNNING → PAUSED
-
-PAUSED  → RUNNING   (resume)
-
-PENDING → STOPPED
-RUNNING → STOPPED
-PAUSED  → STOPPED
+```json
+{
+  "process_id":   "string (UUID)",
+  "status":       "string",
+  "progress":     "ProgressResponse",
+  "created_at":   "ISO 8601 datetime",
+  "started_at":   "ISO 8601 datetime | null",
+  "completed_at": "ISO 8601 datetime | null"
+}
 ```
 
 ---
 
 ## Endpoints
 
-### `GET /health`
-
-Health check.
-
-**Response `200 OK`**
-
-```json
-{
-  "status": "UP"
-}
-```
-
 ---
 
-### `POST /process/start`
+### POST /process/start
 
-Creates and immediately starts a new document analysis process. The process is created with status `PENDING` and the analysis runs asynchronously in the background.
+Start a new document processing job. Creates the process record, schedules the worker in a background thread, and returns immediately.
 
-**Request body:** None
+**Request body:** none
 
-**Response `201 Created`** — `ProcessResponse`
+**Response `201 Created`**
 
 ```json
 {
-  "process_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "process_id": "7f438c06-a983-4d6f-89b7-2d512cd4f643",
   "status": "PENDING",
-  "progress": {
-    "total_files": 0,
-    "processed_files": 0,
-    "percentage": 0
-  },
+  "progress": { "total_files": 0, "processed_files": 0, "percentage": 0 },
   "started_at": null,
+  "completed_at": null,
   "estimated_completion": null,
   "results": null
 }
 ```
 
-> `results` is `null` at creation time. Query `/results/{process_id}` once the process reaches `COMPLETED`.
+**Notes**
+- The returned status may already be `RUNNING` depending on thread scheduling latency.
+- `estimated_completion` is calculated from elapsed time per file once at least one file has been processed.
 
 ---
 
-### `GET /process/status/{process_id}`
+### GET /process/list
 
-Returns the current state and progress of a process.
+Return all processes ordered by creation time descending (newest first).
+
+**Response `200 OK`** — array of `ProcessListItemResponse`
+
+```json
+[
+  {
+    "process_id": "7f438c06-a983-4d6f-89b7-2d512cd4f643",
+    "status": "RUNNING",
+    "progress": { "total_files": 10, "processed_files": 3, "percentage": 30 },
+    "created_at": "2026-04-28T11:30:00Z",
+    "started_at": "2026-04-28T11:30:00Z",
+    "completed_at": null
+  }
+]
+```
+
+Returns `[]` if no processes exist.
+
+---
+
+### GET /process/status/{process_id}
+
+Get the current status and progress of a specific process.
 
 **Path parameters**
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `process_id` | `string (UUID)` | Yes | Process identifier |
+| Parameter | Type | Description |
+|---|---|---|
+| `process_id` | UUID string | ID of the process |
 
 **Response `200 OK`** — `ProcessResponse`
 
-```json
-{
-  "process_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "status": "RUNNING",
-  "progress": {
-    "total_files": 10,
-    "processed_files": 4,
-    "percentage": 40
-  },
-  "started_at": "2024-01-15T10:30:00.000000Z",
-  "estimated_completion": null,
-  "results": null
-}
-```
-
 **Response `404 Not Found`**
-
 ```json
 { "detail": "Process not found" }
 ```
 
-**Response `422 Unprocessable Entity`** — Invalid UUID format
-
+**Response `422 Unprocessable Entity`**
 ```json
 { "detail": "process_id con formato inválido" }
 ```
 
 ---
 
-### `GET /process/list`
+### GET /process/results/{process_id}
 
-Returns all processes ordered by creation date (most recent first).
-
-**Response `200 OK`** — `ProcessListItemResponse[]`
-
-```json
-[
-  {
-    "process_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-    "status": "COMPLETED",
-    "progress": {
-      "total_files": 10,
-      "processed_files": 10,
-      "percentage": 100
-    },
-    "created_at": "2024-01-15T10:29:50.000000Z",
-    "started_at": "2024-01-15T10:30:00.000000Z",
-    "completed_at": "2024-01-15T10:30:45.000000Z"
-  }
-]
-```
-
-Returns an empty array `[]` if no processes exist.
-
----
-
-### `POST /process/pause/{process_id}`
-
-Pauses a `RUNNING` process. The worker finishes the file currently in progress and then blocks until the process is resumed or stopped. Progress is preserved.
+Get the full result payload including analysis data.
 
 **Path parameters**
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `process_id` | `string (UUID)` | Yes | Process identifier |
+| Parameter | Type | Description |
+|---|---|---|
+| `process_id` | UUID string | ID of the process |
 
-**Request body:** None
-
-**Response `200 OK`** — `ProcessResponse`
+**Response `200 OK`** — `ProcessResponse` with `results` populated when `status == COMPLETED`
 
 ```json
 {
-  "process_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "status": "PAUSED",
-  "progress": {
-    "total_files": 10,
-    "processed_files": 4,
-    "percentage": 40
-  },
-  "started_at": "2024-01-15T10:30:00.000000Z",
+  "process_id": "7f438c06-a983-4d6f-89b7-2d512cd4f643",
+  "status": "COMPLETED",
+  "progress": { "total_files": 10, "processed_files": 10, "percentage": 100 },
+  "started_at": "2026-04-28T11:30:00Z",
+  "completed_at": "2026-04-28T11:30:45Z",
   "estimated_completion": null,
-  "results": null
+  "results": {
+    "total_words": 18432,
+    "total_lines": 743,
+    "total_characters": 112850,
+    "most_frequent_words": ["the", "and", "of", "to", "in"],
+    "files_processed": ["Antimatter.txt", "Dark Matter.txt", "..."],
+    "summary": "Antimatter.txt: <first 3 sentences>..."
+  }
 }
 ```
 
-**Response `404 Not Found`** — Process not found or not in `RUNNING` state
+**Response `404 Not Found`**
+```json
+{ "detail": "Process not found" }
+```
+
+---
+
+### POST /process/stop/{process_id}
+
+Stop a process that is `RUNNING`, `PENDING`, or `PAUSED`. The worker exits at the next file boundary.
+
+**Path parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `process_id` | UUID string | ID of the process to stop |
+
+**Response `200 OK`** — `ProcessResponse` with `status: "STOPPED"`
+
+**Response `404 Not Found`**
+
+Returned when the process does not exist or is already in a terminal state.
+
+```json
+{ "detail": "Process not found" }
+```
+
+---
+
+### POST /process/pause/{process_id}
+
+Pause a `RUNNING` process. The worker completes the current file then blocks until resumed.
+
+**Path parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `process_id` | UUID string | ID of the process to pause |
+
+**Response `200 OK`** — `ProcessResponse` with `status: "PAUSED"`
+
+**Response `404 Not Found`**
+
+Returned when the process does not exist or is not `RUNNING`.
 
 ```json
 { "detail": "Process not found or not running" }
@@ -247,36 +237,21 @@ Pauses a `RUNNING` process. The worker finishes the file currently in progress a
 
 ---
 
-### `POST /process/resume/{process_id}`
+### POST /process/resume/{process_id}
 
-Resumes a `PAUSED` process. The worker unblocks and continues from where it stopped.
+Resume a `PAUSED` process.
 
 **Path parameters**
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `process_id` | `string (UUID)` | Yes | Process identifier |
+| Parameter | Type | Description |
+|---|---|---|
+| `process_id` | UUID string | ID of the process to resume |
 
-**Request body:** None
+**Response `200 OK`** — `ProcessResponse` with `status: "RUNNING"`
 
-**Response `200 OK`** — `ProcessResponse`
+**Response `404 Not Found`**
 
-```json
-{
-  "process_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "status": "RUNNING",
-  "progress": {
-    "total_files": 10,
-    "processed_files": 4,
-    "percentage": 40
-  },
-  "started_at": "2024-01-15T10:30:00.000000Z",
-  "estimated_completion": "2024-01-15T10:31:30.000000Z",
-  "results": null
-}
-```
-
-**Response `404 Not Found`** — Process not found or not in `PAUSED` state
+Returned when the process does not exist or is not `PAUSED`.
 
 ```json
 { "detail": "Process not found or not paused" }
@@ -284,162 +259,112 @@ Resumes a `PAUSED` process. The worker unblocks and continues from where it stop
 
 ---
 
-### `POST /process/stop/{process_id}`
+### GET /process/logs/{process_id}
 
-Stops a process. Only processes in `PENDING`, `RUNNING`, or `PAUSED` state can be stopped. Stopping a `PAUSED` process automatically unblocks the worker so it can detect the stop signal. Processes already in `COMPLETED`, `FAILED`, or `STOPPED` state return `404`.
-
-**Path parameters**
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `process_id` | `string (UUID)` | Yes | Process identifier |
-
-**Request body:** None
-
-**Response `200 OK`** — `ProcessResponse`
-
-```json
-{
-  "process_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "status": "STOPPED",
-  "progress": {
-    "total_files": 10,
-    "processed_files": 3,
-    "percentage": 30
-  },
-  "started_at": "2024-01-15T10:30:00.000000Z",
-  "estimated_completion": null,
-  "results": null
-}
-```
-
-**Response `404 Not Found`** — Process not found or not in a stoppable state
-
-```json
-{ "detail": "Process not found" }
-```
-
----
-
-### `GET /process/results/{process_id}`
-
-Returns the process state plus analysis results. The `results` field is populated only when the process has reached `COMPLETED` status.
+Return the activity log entries for a process in chronological order.
 
 **Path parameters**
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `process_id` | `string (UUID)` | Yes | Process identifier |
+| Parameter | Type | Description |
+|---|---|---|
+| `process_id` | UUID string | ID of the process |
 
-**Response `200 OK`** — `ProcessResponse`
-
-```json
-{
-  "process_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "status": "COMPLETED",
-  "progress": {
-    "total_files": 10,
-    "processed_files": 10,
-    "percentage": 100
-  },
-  "started_at": "2024-01-15T10:30:00.000000Z",
-  "estimated_completion": null,
-  "results": {
-    "total_words": 12450,
-    "total_lines": 620,
-    "total_characters": 78300,
-    "most_frequent_words": ["the", "of", "and", "to", "a"],
-    "files_processed": [
-      "Antimatter.txt",
-      "Dark Matter.txt",
-      "Jules Verne.txt"
-    ],
-    "summary": "Antimatter.txt: Antimatter is composed of antiparticles...\nDark Matter.txt: Dark matter is a hypothetical form..."
-  }
-}
-```
-
-**Response `404 Not Found`**
-
-```json
-{ "detail": "Process not found" }
-```
-
-**Response `422 Unprocessable Entity`** — Invalid UUID format
-
-```json
-{ "detail": "process_id con formato inválido" }
-```
-
----
-
-### `GET /process/logs/{process_id}`
-
-Returns the activity log of a process, ordered chronologically.
-
-**Path parameters**
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `process_id` | `string (UUID)` | Yes | Process identifier |
-
-**Response `200 OK`** — `LogEntry[]`
+**Response `200 OK`**
 
 ```json
 [
-  {
-    "message": "Process created with PENDING status",
-    "created_at": "2024-01-15T10:29:50.000000Z"
-  },
-  {
-    "message": "Process started in background",
-    "created_at": "2024-01-15T10:30:00.000000Z"
-  },
-  {
-    "message": "Process completed successfully",
-    "created_at": "2024-01-15T10:30:45.000000Z"
-  }
+  { "message": "Process created with PENDING status", "created_at": "2026-04-28T11:30:00.123456" },
+  { "message": "Process started in background",       "created_at": "2026-04-28T11:30:00.145000" },
+  { "message": "Process completed successfully",      "created_at": "2026-04-28T11:30:45.678900" }
 ]
 ```
 
-**Response `404 Not Found`**
+Log levels recorded: `INFO`, `WARNING`, `ERROR`.
 
+**Response `404 Not Found`**
 ```json
 { "detail": "Process not found" }
 ```
 
 ---
 
-## HTTP Status Code Summary
+### DELETE /process/clear
 
-| Code | Meaning |
-|------|---------|
-| `200 OK` | Request succeeded |
-| `201 Created` | Process created successfully |
-| `404 Not Found` | Process does not exist or is not in a valid state for the operation |
-| `422 Unprocessable Entity` | Invalid UUID format or validation error |
-| `500 Internal Server Error` | Unexpected server error |
+Delete all processes in a terminal state (`COMPLETED`, `FAILED`, `STOPPED`) along with their results and activity logs. Active processes are not affected.
+
+**Response `200 OK`**
+
+```json
+{ "deleted": 12 }
+```
+
+Returns `{ "deleted": 0 }` if no finished processes exist.
 
 ---
 
-## Typical Usage Flow
+### GET /health
 
-```
-1. POST /process/start          → receive process_id (status: PENDING)
-2. GET  /process/status/{id}    → poll until status is COMPLETED or FAILED
-3. GET  /process/results/{id}   → retrieve analysis results
-4. GET  /process/logs/{id}      → inspect activity log
-```
+Health check.
 
-To stop a running process:
-
-```
-POST /process/stop/{id}         → status transitions to STOPPED
+**Response `200 OK`**
+```json
+{ "status": "UP" }
 ```
 
-To pause and resume:
+---
+
+## WebSocket
+
+### WS /process/ws/{process_id}
+
+Subscribe to real-time updates for a specific process.
+
+**Connection URL**
 
 ```
-POST /process/pause/{id}        → status transitions to PAUSED  (only from RUNNING)
-POST /process/resume/{id}       → status transitions to RUNNING (only from PAUSED)
+ws://localhost:8000/process/ws/{process_id}
 ```
+
+**Server → Client message types**
+
+Progress update (after each file is processed):
+
+```json
+{
+  "type": "progress",
+  "status": "RUNNING",
+  "progress": { "total_files": 10, "processed_files": 4, "percentage": 40 }
+}
+```
+
+Status transition (on start and on terminal state):
+
+```json
+{
+  "type": "status",
+  "status": "COMPLETED",
+  "progress": { "total_files": 10, "processed_files": 10, "percentage": 100 }
+}
+```
+
+**Client behavior**
+
+Close the connection when `status` is `COMPLETED`, `FAILED`, or `STOPPED`. The server does not close it automatically.
+
+**Notes**
+
+- Multiple clients can subscribe to the same `process_id` simultaneously.
+- Messages are not buffered. Only events after the connection is established are delivered.
+- If the process finishes before the client connects, poll `GET /process/status/{process_id}` instead.
+
+---
+
+## Error Handling
+
+All error responses follow FastAPI's default format:
+
+```json
+{ "detail": "Human-readable error message" }
+```
+
+`ValueError` exceptions from the service layer are caught globally and returned as `422 Unprocessable Entity`. All errors are logged server-side in structured JSON format.
