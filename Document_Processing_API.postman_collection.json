@@ -1,0 +1,409 @@
+{
+  "info": {
+    "name": "Document Processing API",
+    "_postman_id": "d3e4f5a6-b7c8-9012-defa-345678901234",
+    "description": "REST API for asynchronous document analysis. Start a process, poll its status, inspect results and logs, and control execution via pause/resume/stop.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string",
+      "description": "Base URL of the running API"
+    },
+    {
+      "key": "process_id",
+      "value": "",
+      "type": "string",
+      "description": "Populated automatically by 'Start Process'"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": ["{{base_url}}"],
+              "path": ["health"]
+            },
+            "description": "Verifies the API is up and reachable."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Status is UP', () => {",
+                  "    pm.expect(pm.response.json().status).to.eql('UP');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Process",
+      "item": [
+        {
+          "name": "Start Process",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/process/start",
+              "host": ["{{base_url}}"],
+              "path": ["process", "start"]
+            },
+            "description": "Creates a new analysis process and starts it in the background. Saves the returned process_id as a collection variable."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "",
+                  "pm.test('Response has required fields', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body).to.have.property('process_id');",
+                  "    pm.expect(body).to.have.property('status');",
+                  "    pm.expect(body).to.have.property('progress');",
+                  "    pm.expect(body).to.have.property('started_at');",
+                  "    pm.expect(body).to.have.property('estimated_completion');",
+                  "    pm.expect(body).to.have.property('results');",
+                  "});",
+                  "",
+                  "pm.test('Status is PENDING, RUNNING or COMPLETED', () => {",
+                  "    const status = pm.response.json().status;",
+                  "    pm.expect(['PENDING', 'RUNNING', 'COMPLETED']).to.include(status);",
+                  "});",
+                  "",
+                  "pm.test('Progress fields present', () => {",
+                  "    const progress = pm.response.json().progress;",
+                  "    pm.expect(progress).to.have.property('total_files');",
+                  "    pm.expect(progress).to.have.property('processed_files');",
+                  "    pm.expect(progress).to.have.property('percentage');",
+                  "});",
+                  "",
+                  "// Save process_id for subsequent requests",
+                  "const processId = pm.response.json().process_id;",
+                  "pm.collectionVariables.set('process_id', processId);",
+                  "console.log('process_id saved:', processId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Processes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/process/list",
+              "host": ["{{base_url}}"],
+              "path": ["process", "list"]
+            },
+            "description": "Returns all processes ordered by creation date (most recent first)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "",
+                  "pm.test('Response is an array', () => {",
+                  "    pm.expect(pm.response.json()).to.be.an('array');",
+                  "});",
+                  "",
+                  "pm.test('Each item has required fields', () => {",
+                  "    const list = pm.response.json();",
+                  "    if (list.length === 0) return;",
+                  "    list.forEach(item => {",
+                  "        pm.expect(item).to.have.property('process_id');",
+                  "        pm.expect(item).to.have.property('status');",
+                  "        pm.expect(item).to.have.property('progress');",
+                  "        pm.expect(item).to.have.property('created_at');",
+                  "    });",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Process Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/process/status/{{process_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["process", "status", "{{process_id}}"]
+            },
+            "description": "Returns the current state and progress. Run after 'Start Process' so {{process_id}} is populated."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "",
+                  "pm.test('process_id matches', () => {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.process_id).to.eql(pm.collectionVariables.get('process_id'));",
+                  "});",
+                  "",
+                  "pm.test('Status is a known value', () => {",
+                  "    const valid = ['PENDING', 'RUNNING', 'PAUSED', 'COMPLETED', 'FAILED', 'STOPPED'];",
+                  "    pm.expect(valid).to.include(pm.response.json().status);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Process Results",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/process/results/{{process_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["process", "results", "{{process_id}}"]
+            },
+            "description": "Returns the process state plus analysis results. 'results' is populated only when status is COMPLETED."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "",
+                  "pm.test('process_id matches', () => {",
+                  "    pm.expect(pm.response.json().process_id).to.eql(pm.collectionVariables.get('process_id'));",
+                  "});",
+                  "",
+                  "pm.test('If COMPLETED, results are populated', () => {",
+                  "    const body = pm.response.json();",
+                  "    if (body.status !== 'COMPLETED') return;",
+                  "    pm.expect(body.results).to.not.be.null;",
+                  "    pm.expect(body.results.total_words).to.be.a('number');",
+                  "    pm.expect(body.results.files_processed).to.be.an('array');",
+                  "    pm.expect(body.results.most_frequent_words).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Process Logs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/process/logs/{{process_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["process", "logs", "{{process_id}}"]
+            },
+            "description": "Returns the chronological activity log of the process."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "",
+                  "pm.test('Response is an array', () => {",
+                  "    pm.expect(pm.response.json()).to.be.an('array');",
+                  "});",
+                  "",
+                  "pm.test('Each entry has message and created_at', () => {",
+                  "    const logs = pm.response.json();",
+                  "    if (logs.length === 0) return;",
+                  "    logs.forEach(entry => {",
+                  "        pm.expect(entry).to.have.property('message');",
+                  "        pm.expect(entry).to.have.property('created_at');",
+                  "    });",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Pause Process",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/process/pause/{{process_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["process", "pause", "{{process_id}}"]
+            },
+            "description": "Pauses a RUNNING process. The worker finishes the current file and then blocks. Returns 404 if the process is not in RUNNING state."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200 or 404', () => {",
+                  "    pm.expect([200, 404]).to.include(pm.response.code);",
+                  "});",
+                  "",
+                  "if (pm.response.code === 200) {",
+                  "    pm.test('Status is PAUSED', () => {",
+                  "        pm.expect(pm.response.json().status).to.eql('PAUSED');",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Resume Process",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/process/resume/{{process_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["process", "resume", "{{process_id}}"]
+            },
+            "description": "Resumes a PAUSED process. Returns 404 if the process is not in PAUSED state."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200 or 404', () => {",
+                  "    pm.expect([200, 404]).to.include(pm.response.code);",
+                  "});",
+                  "",
+                  "if (pm.response.code === 200) {",
+                  "    pm.test('Status is RUNNING', () => {",
+                  "        pm.expect(pm.response.json().status).to.eql('RUNNING');",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Stop Process",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/process/stop/{{process_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["process", "stop", "{{process_id}}"]
+            },
+            "description": "Stops a PENDING, RUNNING, or PAUSED process. Returns 404 if the process is already COMPLETED, FAILED, or STOPPED."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200 or 404', () => {",
+                  "    pm.expect([200, 404]).to.include(pm.response.code);",
+                  "});",
+                  "",
+                  "if (pm.response.code === 200) {",
+                  "    pm.test('Status is STOPPED', () => {",
+                  "        pm.expect(pm.response.json().status).to.eql('STOPPED');",
+                  "    });",
+                  "    pm.test('process_id matches', () => {",
+                  "        pm.expect(pm.response.json().process_id).to.eql(pm.collectionVariables.get('process_id'));",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Status — Invalid UUID (422)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/process/status/not-a-uuid",
+              "host": ["{{base_url}}"],
+              "path": ["process", "status", "not-a-uuid"]
+            },
+            "description": "Expects 422 because 'not-a-uuid' is not a valid UUID format."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 422', () => pm.response.to.have.status(422));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Stop Process — Not Found (404)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/process/stop/00000000-0000-0000-0000-000000000000",
+              "host": ["{{base_url}}"],
+              "path": ["process", "stop", "00000000-0000-0000-0000-000000000000"]
+            },
+            "description": "Valid UUID format but no process exists with this ID — expects 404."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('Detail is Process not found', () => {",
+                  "    pm.expect(pm.response.json().detail).to.eql('Process not found');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
